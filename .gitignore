@@ -1,0 +1,21 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# OS
+.DS_Store
+
+# Claude Code session state (local, not project content)
+.claude/
+
+# Generated artifacts (reproducible by running the pipeline — see LEARNER_GUIDE.md)
+outputs/
+data/
+notebooks/.ipynb_checkpoints/
+
+# Editor
+.vscode/
+.idea/
