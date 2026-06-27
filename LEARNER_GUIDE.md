@@ -179,12 +179,180 @@ in advance. An empty folder commits nothing useful to git anyway.
 
 ---
 
-## 6. Document 1 — Dataset Analysis: implementation walkthrough
+## 6. File & Function Reference — what does what, and why
+
+The data flow through Document 1, end to end:
+
+```
+raw image/label paths
+    │
+    ▼
+dataset_loader.load_dataset()          paths in  → paired (image, label) records out
+    │
+    ▼
+image_loader.load_image_meta()         one image path → pixel metadata        (per record)
+annotation_parser.parse_annotation()   one label path → validated boxes       (per record)
+    │
+    ▼
+statistics_generator.generate_statistics()   metadata + boxes → counted-up numbers
+    │
+    ▼
+visualization.*()                      numbers + records → PNG files
+report_generator.generate_report()     numbers → CSV files
+```
+
+Every arrow is a module boundary, and every module boundary exists for a
+specific reason — not arbitrarily. Below is each file, its function(s), and
+*why* the boundary is drawn exactly there.
+
+### `schema.py` — shared data contracts (written for you)
+
+**What:** four `@dataclass` definitions — `BoundingBox`, `Annotation`,
+`ImageMeta`, `DatasetRecord`. No logic, no I/O, just named, typed shapes.
+
+**Why it exists:** without a shared contract, every module would invent its
+own tuple or dict for "a bounding box" — one might use
+`(class_id, x, y, w, h)`, another `(x, y, w, h, class_id)`, and a mismatch
+between them would fail silently (wrong number assigned to wrong field,
+no error, just corrupted statistics three modules later). A dataclass is
+one definition that every other file imports — change a field name once,
+every caller that's wrong fails loudly with an `AttributeError`, immediately,
+at the point of the mistake.
+
+### `config.py` — single source of truth for paths & class names (written for you)
+
+**What:** `get_dataset_root()` (downloads/locates the cached dataset via
+`kagglehub`), the four subdirectory path constants
+(`TRAIN_IMAGES_SUBDIR`, etc.), `NUM_CLASSES = 13`, the `CLASS_NAMES` dict,
+and `OUTPUT_DIR`.
+
+**Why it exists:** the real on-disk folder names are oddly nested
+(`new_train (1)/new_t/images`) — an artifact of how the dataset was zipped.
+If six different files each hardcoded that path string, fixing a typo or
+adapting to a future dataset version means editing six files and hoping you
+didn't miss one. Centralizing it means changing one constant. The same logic
+applies to `CLASS_NAMES`: it's an inferred hypothesis (Document 0, Section 3),
+not a fact read from a file — it needs to live in exactly one place you can
+correct after you run `draw_bbox_overlay()` yourself.
+
+### `main.py` — orchestrator (written for you)
+
+**What:** `run(split)` calls, strictly in this order: `load_dataset()` →
+`load_image_meta()` + `parse_annotation()` per record → `generate_statistics()`
+→ four `visualization` calls → `generate_report()`.
+
+**Why it exists:** so that sequencing logic and data-processing logic never
+mix. `main.py` contains zero statistics math, zero validation rules, zero
+plotting code — it only calls things in order and prints progress. This is
+exactly why you could test `load_dataset()` directly in Section 7.1 without
+running the whole pipeline: every module is independently callable, and
+`main.py` is the only file that needs to know about all of them at once.
+
+### `dataset_loader.py` → `load_dataset(images_dir, labels_dir, split)`
+
+**What:** lists `*.jpg` and `*.txt` files, matches them by filename stem,
+returns `LoadResult(records, images_without_label, labels_without_image)`.
+
+**Why it exists, and why it's first:** nothing downstream can run until you
+know which (image, label) pairs are even valid to process — this is the
+gatekeeper. It deliberately knows **nothing** about pixel content or box
+content (no `cv2.imread`, no parsing `.txt` contents) — that boundary keeps
+it fast (pure filesystem listing over 12,000 files) and means a bug in image
+decoding can never be mistaken for a pairing bug, because they're physically
+different functions.
+
+### `image_loader.py` → `load_image_meta(image_path)`
+
+**What:** opens one image, returns `ImageMeta(height, width, channels, is_corrupted, error)`.
+
+**Why it exists:** decoding is the expensive, failure-prone step (vs. just
+listing a filename). Isolating it in one function means: (1) it's decoded
+exactly once per image — `statistics_generator.py` reuses this result instead
+of re-opening the file, and (2) a corrupted file is caught in exactly one
+place, with one consistent meaning (`is_corrupted=True`), instead of crashing
+differently depending on which downstream module happened to touch the file
+first.
+
+### `annotation_parser.py` → `parse_annotation(label_path, num_classes)`
+
+**What:** reads a `.txt` label file line by line, validates each one, returns
+`Annotation(boxes=[valid...], malformed_lines=[raw invalid lines])`.
+
+**Why it exists:** this is the *only* place the six validation rules
+(class id in range, coordinates in `[0,1]`, positive width/height, box stays
+in-bounds) are implemented. Keeping validation in exactly one function means
+Document 2 (Annotation Validation) can reuse this same logic rather than
+re-deriving the rules from scratch, and means "what counts as a malformed
+annotation" has exactly one definition in the whole project, not a slightly
+different interpretation in every module that touches a label file.
+
+### `statistics_generator.py` → `generate_statistics(load_result, image_meta_by_stem, annotations_by_stem)`
+
+**What:** takes the *already computed* outputs of the three functions above
+and reduces them to one `DatasetStatistics` (totals, class distribution,
+average resolution, largest/smallest object, corruption/malformed counts).
+
+**Why it exists, and why it does no I/O:** it's deliberately a pure function
+— same inputs always produce the same `DatasetStatistics`, with no file reads
+inside it. That means you can unit-test it with three fake records in
+milliseconds, without touching the real 627MB dataset, and a bug in "the
+math" can never be confused with a bug in "reading the file" — they're
+different functions you can test in isolation.
+
+### `visualization.py` — 5 functions
+
+**What:** `plot_class_histogram`, `plot_bbox_size_histogram`,
+`plot_resolution_distribution`, `show_random_samples`, `draw_bbox_overlay` —
+each takes already-computed data plus an output path, saves one PNG, returns
+the path it wrote.
+
+**Why it exists, separately from statistics:** separating "compute the
+numbers" from "draw a picture of the numbers" means you can redesign a chart
+(colors, sort order, bins) without touching any statistic, and vice versa.
+`draw_bbox_overlay()` is the most important function in this file for a
+different reason: it's the only output in Document 1 you must *look at*, not
+just print — it's how you personally confirm or correct the inferred
+`CLASS_NAMES` mapping in `config.py` before it gets baked into training data
+in Document 6.
+
+### `report_generator.py` → `generate_report(stats, output_dir, split)`
+
+**What:** serializes one `DatasetStatistics` into
+`{split}_dataset_report.csv` and `{split}_bbox_statistics.csv`, returns a
+dict of `{artifact_name: path_written}`.
+
+**Why it exists, and why it's the only writer:** concentrating every disk
+write in one function means there's exactly one place to check if you ever
+need to answer "what files does this project create, and where" — you don't
+have to grep six files to find a stray `open(..., "w")`. It also means a
+partial-write bug (a crash mid-save leaving a half-written CSV) can only ever
+happen in one place, which makes it easy to guard against (build the full
+content in memory, then write once).
+
+---
+
+## 7. Document 1 — Dataset Analysis: implementation walkthrough
 
 Implement the six modules **in this order** — each depends on the one before
-it being testable.
+it being testable. (See Section 6 above for *what* each function does and
+*why* it's structured this way — this section is the "do it, test it" steps.)
 
-### 6.1 `dataset_loader.py` → `load_dataset()`
+> **Every "Test it" command below (7.1–7.6), and the full pipeline command in
+> 7.7, will raise `NotImplementedError` until you've actually written the
+> body of the function it calls.** That is correct, expected behavior — the
+> stub is designed to fail loudly and tell you exactly which function to
+> implement next, instead of failing silently or doing the wrong thing. For
+> example, right now, *before* implementing anything, running 7.7 gives:
+> ```
+> NotImplementedError: TODO: implement load_dataset. Hint: ...
+> ```
+> That traceback is proof the wiring (`main.py` → `dataset_loader.load_dataset`)
+> is correct: it ran `Initialize → Load` and stopped at the very first
+> unimplemented piece, as designed. Don't run 7.7 until 7.1–7.6 are all done —
+> each section below is a checkpoint, run its own "Test it" command first and
+> confirm the "Expected result" before moving to the next section.
+
+### 7.1 `dataset_loader.py` → `load_dataset()`
 
 Locate dataset → verify folders exist → collect image paths → collect label
 paths → pair them by filename stem. Full spec is in the docstring already in
@@ -213,7 +381,7 @@ images_without_label: 0
 labels_without_image: 0
 ```
 
-### 6.2 `image_loader.py` → `load_image_meta()`
+### 7.2 `image_loader.py` → `load_image_meta()`
 
 Read one image → detect corruption → return height/width/channels.
 
@@ -233,7 +401,7 @@ print(load_image_meta(img))
 **Expected result:** an `ImageMeta` with `is_corrupted=False`, `error=None`,
 and real positive `height`/`width`/`channels` values (`channels` should be 3).
 
-### 6.3 `annotation_parser.py` → `parse_annotation()`
+### 7.3 `annotation_parser.py` → `parse_annotation()`
 
 Read a `.txt` label file → validate each line → return structured boxes +
 any malformed lines.
@@ -256,9 +424,9 @@ print('malformed:', ann.malformed_lines)
 **Expected result:** `boxes` is a list of exactly 2 `BoundingBox` objects
 (`class_id=6` and `class_id=0`), `malformed` is an empty list.
 
-### 6.4 `statistics_generator.py` → `generate_statistics()`
+### 7.4 `statistics_generator.py` → `generate_statistics()`
 
-Reduce the outputs of 6.1–6.3 (run across *all* records, not just one) into
+Reduce the outputs of 7.1–7.3 (run across *all* records, not just one) into
 one `DatasetStatistics` object.
 
 **Expected result when run across the full train split** — these are the
@@ -274,7 +442,7 @@ real numbers, your code should reproduce them exactly (see
 | largest class | `0` (3,755 instances) |
 | smallest class | `2` (28 instances) |
 
-### 6.5 `visualization.py` (5 functions)
+### 7.5 `visualization.py` (5 functions)
 
 Each function saves one PNG and returns its path. Implement
 `draw_bbox_overlay()` last and use it across several samples per class —
@@ -282,12 +450,17 @@ this is also how you'll personally confirm or correct the class-name
 hypothesis in `config.CLASS_NAMES` (it was inferred by visual inspection,
 not read from a file the dataset doesn't provide).
 
-### 6.6 `report_generator.py` → `generate_report()`
+### 7.6 `report_generator.py` → `generate_report()`
 
 Writes the final CSV deliverables. The only module allowed to create
 directories / write files to disk.
 
-### 6.7 Run the whole pipeline
+### 7.7 Run the whole pipeline
+
+**⚠️ Prerequisite: sections 7.1–7.6 must all be implemented and individually
+tested first.** This command exercises all six modules together — if any one
+of them is still a stub, this is where it'll surface, naming that exact
+function.
 
 ```bash
 python -m src.dataset_analysis.main
@@ -316,7 +489,7 @@ committed.)
 
 ---
 
-## 7. What's next
+## 8. What's next
 
 Document 2 — Annotation Validation — formalizes the malformed-annotation
 logging from Document 1 into its own reusable pipeline with a CSV report.
@@ -337,3 +510,6 @@ That section will be appended here once we start it.
   run modules as `python -m src.dataset_analysis.main`, not
   `python src/dataset_analysis/main.py` — the `-m` form is required for the
   relative imports (`from . import config`) inside the package to resolve.
+- **`NotImplementedError: TODO: implement ...`:** not a bug — see the callout
+  at the top of Section 7. It means the function named in the message hasn't
+  been implemented yet. Go implement it.
