@@ -58,7 +58,30 @@ def load_dataset(images_dir: Path, labels_dir: Path, split: str) -> LoadResult:
           confusing empty-list bug three modules downstream.
         - Individual orphan files: never raise. Record + exclude from `records`.
     """
-    raise NotImplementedError(
-        "TODO: implement load_dataset. "
-        "Hint: Path.glob('*.jpg') and Path.glob('*.txt'), compare stems with set operations."
+    if not images_dir.is_dir():
+        raise FileNotFoundError(f"images_dir not found: {images_dir}")
+    if not labels_dir.is_dir():
+        raise FileNotFoundError(f"labels_dir not found: {labels_dir}")
+
+    image_stems = {f.stem for f in images_dir.glob("*.jpg")}
+    label_stems = {f.stem for f in labels_dir.glob("*.txt")}
+
+    paired_stems = image_stems & label_stems
+    images_without_label = sorted(image_stems - label_stems)
+    labels_without_image = sorted(label_stems - image_stems)
+
+    records = [
+        DatasetRecord(
+            stem=stem,
+            split=split,
+            image_path=images_dir / f"{stem}.jpg",
+            label_path=labels_dir / f"{stem}.txt",
+        )
+        for stem in sorted(paired_stems)
+    ]
+
+    return LoadResult(
+        records=records,
+        images_without_label=images_without_label,
+        labels_without_image=labels_without_image,
     )

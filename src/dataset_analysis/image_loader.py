@@ -10,6 +10,8 @@ never re-open a file that already failed here.
 
 from pathlib import Path
 
+import cv2
+
 from .schema import ImageMeta
 
 
@@ -51,7 +53,15 @@ def load_image_meta(image_path: Path) -> ImageMeta:
         state. Catch the decode error, fill in is_corrupted=True, return
         normally.
     """
-    raise NotImplementedError(
-        "TODO: implement load_image_meta. "
-        "Hint: cv2.imread() returns None (not an exception) on failure — check for that."
-    )
+    if not image_path.exists():
+        return ImageMeta(height=0, width=0, channels=0, is_corrupted=True,
+                          error=f"file not found: {image_path}")
+
+    img = cv2.imread(str(image_path))
+    if img is None:
+        return ImageMeta(height=0, width=0, channels=0, is_corrupted=True,
+                          error="cv2.imread returned None (corrupted or unsupported file)")
+
+    height, width = img.shape[0], img.shape[1]
+    channels = img.shape[2] if img.ndim == 3 else 1
+    return ImageMeta(height=height, width=width, channels=channels, is_corrupted=False, error=None)

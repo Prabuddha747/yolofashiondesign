@@ -80,8 +80,48 @@ def generate_statistics(
         DatasetStatistics full of zeros that could be misread as "a
         perfectly clean, just empty, dataset."
     """
-    raise NotImplementedError(
-        "TODO: implement generate_statistics. "
-        "Hint: build it up incrementally — get total_images/total_labels right first, "
-        "print() the partial result, then add the next field."
+    if not load_result.records:
+        raise ValueError("load_result.records is empty - nothing loaded")
+
+    total_images = len(load_result.records)
+    total_labels = len(load_result.records)
+    corrupted_files = sum(1 for m in image_meta_by_stem.values() if m.is_corrupted)
+    malformed_annotation_count = sum(len(a.malformed_lines) for a in annotations_by_stem.values())
+
+    class_distribution: Dict[int, int] = {}
+    largest_object = {"stem": None, "class_id": None, "area_norm": -1.0}
+    smallest_object = {"stem": None, "class_id": None, "area_norm": float("inf")}
+    area_sum = 0.0
+    area_count = 0
+
+    for stem, annotation in annotations_by_stem.items():
+        for box in annotation.boxes:
+            class_distribution[box.class_id] = class_distribution.get(box.class_id, 0) + 1
+
+            area = box.width * box.height
+            area_sum += area
+            area_count += 1
+
+            if area > largest_object["area_norm"]:
+                largest_object = {"stem": stem, "class_id": box.class_id, "area_norm": area}
+            if area < smallest_object["area_norm"]:
+                smallest_object = {"stem": stem, "class_id": box.class_id, "area_norm": area}
+
+    widths = [m.width for m in image_meta_by_stem.values() if not m.is_corrupted]
+    heights = [m.height for m in image_meta_by_stem.values() if not m.is_corrupted]
+    avg_resolution = (sum(widths) / len(widths), sum(heights) / len(heights)) if widths else (0.0, 0.0)
+    avg_bbox_area_norm = area_sum / area_count if area_count else 0.0
+
+    return DatasetStatistics(
+        total_images=total_images,
+        total_labels=total_labels,
+        images_without_label=len(load_result.images_without_label),
+        labels_without_image=len(load_result.labels_without_image),
+        corrupted_files=corrupted_files,
+        malformed_annotation_count=malformed_annotation_count,
+        class_distribution=class_distribution,
+        avg_resolution=avg_resolution,
+        avg_bbox_area_norm=avg_bbox_area_norm,
+        largest_object=largest_object,
+        smallest_object=smallest_object,
     )

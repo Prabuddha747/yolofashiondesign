@@ -19,7 +19,7 @@ Statistics Generator can report a real count instead of objects vanishing.
 
 from pathlib import Path
 
-from .schema import Annotation
+from .schema import Annotation, BoundingBox
 
 
 def parse_annotation(label_path: Path, num_classes: int) -> Annotation:
@@ -54,8 +54,50 @@ def parse_annotation(label_path: Path, num_classes: int) -> Annotation:
           that's a real upstream bug and must surface loudly, not be papered over.
         - A malformed line: never raise. Record + skip + keep parsing the rest.
     """
-    raise NotImplementedError(
-        "TODO: implement parse_annotation. "
-        "Hint: iterate label_path.read_text().strip().splitlines(), validate each, "
-        "collect good ones into boxes and bad ones (raw line text) into malformed_lines."
-    )
+    if not label_path.exists():
+        raise FileNotFoundError(f"label file not found: {label_path}")
+
+    boxes = []
+    malformed_lines = []
+
+    text = label_path.read_text().strip()
+    if not text:
+        return Annotation(label_path=label_path, boxes=boxes, malformed_lines=malformed_lines)
+
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+
+        parts = line.split()
+        if len(parts) != 5:
+            malformed_lines.append(line)
+            continue
+
+        try:
+            class_id = int(parts[0])
+            x_center, y_center, width, height = (float(p) for p in parts[1:5])
+        except ValueError:
+            malformed_lines.append(line)
+            continue
+
+        if not (0 <= class_id < num_classes):
+            malformed_lines.append(line)
+            continue
+        if not all(0.0 <= v <= 1.0 for v in (x_center, y_center, width, height)):
+            malformed_lines.append(line)
+            continue
+        if width <= 0.0 or height <= 0.0:
+            malformed_lines.append(line)
+            continue
+
+        x1, y1 = x_center - width / 2, y_center - height / 2
+        x2, y2 = x_center + width / 2, y_center + height / 2
+        if x1 < -1e-6 or y1 < -1e-6 or x2 > 1.0 + 1e-6 or y2 > 1.0 + 1e-6:
+            malformed_lines.append(line)
+            continue
+
+        boxes.append(BoundingBox(class_id=class_id, x_center=x_center, y_center=y_center,
+                                  width=width, height=height))
+
+    return Annotation(label_path=label_path, boxes=boxes, malformed_lines=malformed_lines)
