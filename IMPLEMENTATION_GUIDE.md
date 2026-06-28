@@ -65,9 +65,46 @@ for r in result.records[:500]:
 
 ---
 
-## Document 2 — Annotation Validation ⏳ not started
+## Document 2 — Annotation Validation ⏳ deferred
 
 Will append here in the same table format once we start it. Known from
 Document 1: 0 malformed lines exist in the real data, so the validator needs
 a deliberately-corrupted copy of a few label files to prove it actually
-catches problems (see `LEARNER_GUIDE.md` Section 8).
+catches problems (see `LEARNER_GUIDE.md` Section 9).
+
+---
+
+## Document 3 — OpenCV Fundamentals ✅ done (built before Document 2, on request)
+
+Results on disk: `outputs/opencv_fundamentals/{stem}_pipeline_grid.png` +
+`outputs/opencv_fundamentals/{stem}/*.png` (15 files/sample) +
+`notebooks/03_opencv_fundamentals.ipynb` (already executed, images embedded).
+
+| # | File → function | Run | Result |
+|---|---|---|---|
+| 1 | `image_reader.py` → `read_image()` | part of pipeline | `(624,468,3)`, BGR |
+| 2 | `color_converter.py` → `to_rgb/to_hsv/to_lab/to_gray()` | part of pipeline | RGB/HSV/LAB/Gray, see grid |
+| 3 | `blur_processor.py` → `apply_gaussian/median/bilateral()` | part of pipeline | 3 smoothed variants |
+| 4 | `threshold_processor.py` → `apply_global_threshold/adaptive_threshold/morphology()` | part of pipeline | 2 binary masks + cleanup |
+| 5 | `edge_detector.py` → `detect_edges()` | part of pipeline | Canny edges |
+| 6 | `contour_detector.py` → `find_contours/draw_bounding_boxes()` | part of pipeline | outlines → rectangles |
+| 7 | **Full pipeline (CLI)** | `python -m src.opencv_fundamentals.main` | 15-step table printed, grid + per-step PNGs written |
+| 8 | **Full pipeline (notebook)** | `jupyter nbconvert --to notebook --execute --inplace notebooks/03_opencv_fundamentals.ipynb` | same steps, markdown explanations, output embedded |
+
+Pick a colorful sample — the BGR/RGB lesson is invisible on a black/white
+image:
+```python
+from src.opencv_fundamentals.main import run
+run("000150")  # red dress — use this one, not 000060, to actually see BGR vs RGB differ
+```
+
+Two real bugs caught and fixed while building this (full detail in
+`LEARNER_GUIDE.md` Section 8):
+1. Visualizer was auto-correcting BGR before display → both BGR and RGB
+   panels looked identical. Fixed: Original step shown raw on purpose.
+2. `visualizer.py` forced `matplotlib.use("Agg")` at import time → broke the
+   notebook's inline images with zero errors. Fixed: moved to `main.py`'s
+   `if __name__=="__main__"` guard only.
+
+LAB color conversion: first call ~102-111ms, every call after ~0.27ms (one-time
+internal lookup-table build, verified by repeating the call 4x).

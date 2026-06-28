@@ -649,13 +649,104 @@ JPEGs).
 
 ---
 
-## 8. What's next
+## 8. Document 3 — OpenCV Fundamentals
+
+**Built out of order, on request** — Document 2 (Annotation Validation) is
+deferred, not skipped (see Section 9 below for why it still matters). This
+section exists because seeing classical CV operations run on real images —
+grayscale, BGR↔RGB, thresholding, contours — mattered more right now than
+finishing validation plumbing. Full writeup: [docs/03_OpenCV_Fundamentals.md](docs/03_OpenCV_Fundamentals.md).
+
+### What got built
+
+| File | Function | Produces |
+|---|---|---|
+| `image_reader.py` | `read_image()` | Original (BGR) |
+| `color_converter.py` | `to_rgb/to_hsv/to_lab/to_gray()` | RGB, HSV, LAB, Grayscale |
+| `blur_processor.py` | `apply_gaussian/median/bilateral()` | 3 smoothing filters |
+| `threshold_processor.py` | `apply_global_threshold/adaptive_threshold/morphology()` | 2 binary masks + cleanup |
+| `edge_detector.py` | `detect_edges()` | Canny edges |
+| `contour_detector.py` | `find_contours/draw_bounding_boxes()` | Outlines → rectangles |
+| `visualizer.py` | `run_pipeline/save_step_grid/save_individual_steps/print_step_table()` | All artifacts |
+| `main.py` | `run(sample_stem)` | Orchestrates all of the above + a Document-1 YOLO ground-truth bridge step |
+
+Plus `notebooks/03_opencv_fundamentals.ipynb` — same functions, called
+cell-by-cell with markdown explanations between them, **already executed**
+(every image below is embedded in the file, not regenerated on open).
+
+### Run it
+
+```bash
+python -m src.opencv_fundamentals.main
+```
+Saves `outputs/opencv_fundamentals/{stem}_pipeline_grid.png` (one grid, all
+15 steps labeled with shape/channels/time) plus one PNG per step in
+`outputs/opencv_fundamentals/{stem}/`. Default sample is `000060`; pass a
+different stem (`from src.opencv_fundamentals.main import run; run("000150")`)
+to try another image.
+
+### ✅ Observed results (actually run)
+
+**First attempt used the wrong sample image.** `000060.jpg` (a black/white
+striped outfit) was tried first — and the BGR-vs-RGB panels looked almost
+identical, because that photo barely has saturated color to swap. Switched
+to `000150.jpg` (a red dress) specifically because the lesson needs a
+colorful image to be visible at all. Worth remembering generally: a demo
+that "shows no difference" sometimes means the demo input was a poor
+choice, not that there's no difference to show.
+
+**The BGR/RGB step, done right** — `image_reader.py`'s Original step is
+displayed **deliberately uncorrected** (no `cv2.cvtColor` before
+`imshow`), and the RGB step is the corrected version, side by side:
+
+| Original (BGR) — shown uncorrected | RGB — corrected |
+|---|---|
+| dress renders **blue** | dress renders **red** |
+
+This caught a real bug while building it: the first version of
+`visualizer.py` *auto-corrected* every BGR image before display "for
+convenience," which silently defeated the entire lesson (both panels showed
+red, looking identical). Fixed by tagging the Original step `"BGR_RAW"`
+(shown raw) vs. downstream BGR arrays like bounding-box overlays `"BGR"`
+(shown corrected, since *those* steps aren't trying to teach the bug).
+
+**Timing — verified, not assumed:** the first `cv2.cvtColor(..., COLOR_BGR2LAB)`
+call in a fresh process took **~102–111ms**; three immediate repeat calls
+took `0.29ms, 0.27ms, 0.25ms`. That's a 400x difference between call 1 and
+call 2 — confirmed by literally re-running the conversion 4 times in the
+same process before writing this down, rather than trusting the first
+number. It's OpenCV building an internal LAB lookup table once per process.
+
+**Classical contours vs. YOLO ground truth, side by side** — the
+`main.py`-added bonus step overlays Document 1's real annotation on the
+same image the contour detector just processed. On both test images,
+contour-based bounding boxes either wrapped the whole person+background as
+one noisy blob, or fragmented into several small boxes around
+background text/logos — nothing resembling "a garment." The YOLO
+ground-truth box, by contrast, is exactly the dress. This is the concrete,
+visual argument for why Document 6 trains a model instead of relying on
+thresholding+contours.
+
+**A real bug caught while building this, kept here on purpose:**
+`visualizer.py` originally called `matplotlib.use("Agg")` at module level.
+The CLI script worked fine. The **notebook silently broke** — no errors, 0
+embedded images, every `plt.show()` was a no-op — because importing the
+same `visualizer` module forced the notebook's backend to a non-interactive
+one too. Fixed by moving the `Agg` call into `main.py`'s
+`if __name__ == "__main__":` guard, so it only fires for a real CLI run,
+never for an import. **Lesson:** library modules should never call
+`matplotlib.use()` — that's an application-level decision, and a library
+that makes it silently breaks whatever *other* rendering context imports it.
+
+---
+
+## 9. What's next
 
 Document 2 — Annotation Validation — formalizes the malformed-annotation
 logging from Document 1 into its own reusable pipeline with a CSV report.
 That section will be appended here once we start it.
 
-Two real findings from this run directly motivate it:
+Two real findings from Document 1's run directly motivate it:
 - **Zero malformed lines were found in this dataset** (`malformed_annotation_count=0`
   on both splits) — so Document 2's validation logic has nothing to exercise
   *yet*. Document 2 should therefore include deliberately injecting a few
@@ -666,6 +757,10 @@ Two real findings from this run directly motivate it:
   val/train ratio observation) — worth deciding in Document 2 or Document 6
   whether to re-split with stratification, given class `2`
   (`short_sleeve_outwear`) has only 28 train + 13 val examples total.
+
+After Document 2: Document 4 — Image Preprocessing (resize/pad/normalize to
+the 640x640 input YOLO expects) is the natural next step after Document 3's
+classical-CV foundation.
 
 ---
 
