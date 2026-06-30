@@ -8,14 +8,14 @@ results stay on disk in `outputs/<document>/` either way.
 
 One-time setup (do once per machine):
 ```bash
-cd "/Users/prabuddhaverma/Visual Studio Code /yolo"
+cd /path/to/yolofashiondesign   # your local clone of this repo
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 ```
 
 Every session after that, just:
 ```bash
-cd "/Users/prabuddhaverma/Visual Studio Code /yolo" && source venv/bin/activate
+cd /path/to/yolofashiondesign && source venv/bin/activate
 ```
 
 ---
@@ -108,3 +108,62 @@ Two real bugs caught and fixed while building this (full detail in
 
 LAB color conversion: first call ~102-111ms, every call after ~0.27ms (one-time
 internal lookup-table build, verified by repeating the call 4x).
+
+---
+
+## Document 6 — YOLO Training ✅ done (jumped ahead of Documents 2/4/5, on request)
+
+Results on disk: `outputs/yolo_training/best.pt`, `data.yaml`,
+`runs/train/` (curves, confusion matrix, weights), `runs/val/` (final
+eval plots).
+
+| # | File → function | Run | Result |
+|---|---|---|---|
+| 1 | `config.py` → `get_device()` | part of pipeline | auto-picks `"cuda"` > `"mps"` > `"cpu"` for your machine |
+| 2 | `dataset_yaml.py` → `build_data_yaml()` | part of pipeline | `outputs/yolo_training/data.yaml` |
+| 3 | `train.py` → `train_model()` | part of pipeline | `best.pt`, 3 epochs, 69 min compute time |
+| 4 | `evaluate.py` → `evaluate_model()` | part of pipeline | mAP50=0.454, mAP50-95=0.351 |
+| 5 | **Full pipeline** | `python -m src.yolo_training.main` | trains + evaluates + prints summary |
+
+**Calibrate batch size on your own hardware first** — don't assume.
+Example from an 8GB-RAM, no-dedicated-GPU machine: batch=16 → 1.43 img/s,
+batch=8 → 2.78 img/s, batch=4 → 6.10 img/s (smaller batch was faster,
+opposite of typical GPU scaling, due to memory swapping). Used `batch=4`
+for that machine's real run — your fastest batch size will likely differ.
+
+**Real run (example machine above): 3 epochs, full 10,000-image train set:**
+```
+mAP50: 0.454 | mAP50-95: 0.351 | precision: 0.626 | recall: 0.464
+```
+Per-class mAP50 tracks training-instance count almost exactly: `trousers`
+0.858 (2,807 instances) down to `short_sleeve_outwear` 0.015 (28
+instances) — numeric proof of Document 1's 134:1 imbalance warning.
+
+Wall-clock said 5.2 hours; actual compute was ~69 minutes — the machine
+slept mid-run. Use `caffeinate` (macOS) or your OS's equivalent for
+unattended long training next time.
+
+---
+
+## Document 10 — Real-Time Detection ✅ done
+
+Results on disk: `outputs/realtime_detection/captured_photo.png` (and
+`live_last_frame.png` when run with `--max-frames`).
+
+| # | File → function | Run | Result |
+|---|---|---|---|
+| 1 | `capture.py` → `capture_single_frame()` | part of pipeline | real BGR frame from the system's default camera, verified by saving + viewing |
+| 2 | `detector.py` → `GarmentDetector.detect()` | part of pipeline | `FrameResult` (annotated frame, detections, inference ms) |
+| 3 | **Single photo** | `python -m src.realtime_detection.main --mode photo` | captures, detects, saves, prints |
+| 4 | **Live window** | `python -m src.realtime_detection.main --mode live` | continuous detection + FPS overlay, `q`/ESC to quit |
+
+Pipeline verified twice: once with stock `yolov8n.pt` (COCO) — correctly
+found `person 0.79` and `cup 0.35` on a test photo — and once with
+Document 6's trained weights, which needed `--conf 0.15` (down from the
+0.25 default) to show any signal on an out-of-distribution selfie, given
+only 3 training epochs.
+
+One real snag: `cam.read()` returned `False` on every frame mid-session
+while the screen was locked, despite `cam.isOpened()` being `True` — not a
+bug, macOS blocks camera frames during screen lock. Resolved itself once
+unlocked.

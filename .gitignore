@@ -16,6 +16,9 @@ outputs/
 data/
 notebooks/.ipynb_checkpoints/
 
+# Ultralytics auto-downloads pretrained checkpoints to cwd on first use
+yolov8n.pt
+
 # Editor
 .vscode/
 .idea/

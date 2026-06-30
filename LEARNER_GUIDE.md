@@ -24,7 +24,7 @@ Never install packages globally — every dependency for this project lives in
 its own `venv`.
 
 ```bash
-cd "/Users/prabuddhaverma/Visual Studio Code /yolo"
+cd /path/to/yolofashiondesign   # your local clone of this repo
 python3 -m venv venv
 source venv/bin/activate
 python3 -m pip install --upgrade pip
@@ -513,10 +513,11 @@ Every count matches Document 0's full scan exactly — this is the real proof
 that the implementation is correct, not just "looks plausible."
 
 **Timing observation:** decoding all 10,000 images with `cv2.imread` +
-parsing all 10,000 label files took **~24 seconds** on this machine (M-series
-MacBook Air, single-threaded, no multiprocessing). Keep that number in mind
-for Document 6 — training will iterate over this data far more than once per
-run, so image-decode speed is a real cost, not a one-time fee.
+parsing all 10,000 label files took **~24 seconds** on a mid-range laptop
+(single-threaded, no multiprocessing) — expect this number to scale with
+your own CPU. Keep it in mind for Document 6 — training will iterate over
+this data far more than once per run, so image-decode speed is a real
+cost, not a one-time fee.
 
 **Val split, for comparison** (2,000 images — same command, `'val'` instead of `'train'`):
 ```
@@ -761,6 +762,174 @@ Two real findings from Document 1's run directly motivate it:
 After Document 2: Document 4 — Image Preprocessing (resize/pad/normalize to
 the 640x640 input YOLO expects) is the natural next step after Document 3's
 classical-CV foundation.
+
+---
+
+## 10. Document 6 — YOLO Training
+
+**Built next, jumping ahead of Documents 2/4/5** — by explicit request to
+get a trained model and a working camera demo functioning end-to-end today,
+rather than finish every intermediate pedagogical module first. Full
+writeup: [docs/06_YOLO_Training.md](docs/06_YOLO_Training.md).
+
+### What got built
+
+| File | Function | Produces |
+|---|---|---|
+| `config.py` | `get_device()` | auto-picks `"cuda"` > `"mps"` > `"cpu"`, whichever your machine has |
+| `dataset_yaml.py` | `build_data_yaml()` | `data.yaml` pointing at the existing kagglehub cache, no images copied |
+| `train.py` | `train_model()` | trains YOLOv8n via Ultralytics, copies `best.pt` to a stable path |
+| `evaluate.py` | `evaluate_model()` | mAP50/mAP50-95/precision/recall, overall and per class |
+| `main.py` | `run()` | orchestrates build → train → evaluate → print |
+
+### Hardware reality, measured before committing to a run
+
+**Calibrate on your own machine — don't assume a batch size.** On a
+dedicated GPU with plenty of VRAM, bigger batches are usually faster; on a
+memory-constrained machine with no dedicated GPU, they can be *slower*
+once you start swapping. Time 1 epoch at a few batch sizes on a small
+slice of the data (`fraction=0.05`, `val=False`) before committing to a
+full run.
+
+**Example, from the machine this was developed on** (8GB RAM, no dedicated
+GPU, MPS-only acceleration): three 1-epoch calibration runs at different
+batch sizes (5% of the training data, no per-epoch validation) found that
+**smaller batches were faster**, opposite of typical GPU behavior:
+
+| Batch | Throughput |
+|---|---|
+| 16 | 1.43 img/s (memory pressure / swapping) |
+| 8 | 2.78 img/s |
+| 4 | 6.10 img/s ← used for the real run |
+
+Your numbers will differ — this is here as a worked example of the
+methodology, not a setting to copy blindly.
+
+### Run it
+
+```bash
+python -m src.yolo_training.main                                       # full run
+python -m src.yolo_training.main --epochs 1 --batch 4 --fraction 0.02  # ~4 min smoke test
+```
+
+### ✅ Observed results (actually run)
+
+Asked how long to budget for the real run given the ~28.5 min/epoch
+measured rate; chose **3 epochs** as a "quick proof" (~1.5h estimate —
+corrected on the fly from an arithmetic slip that first said 5 epochs/1.5h,
+which doesn't multiply out). Launched in the background with full data
+(`fraction=1.0`), `batch=4`, `imgsz=640`, `device=mps`.
+
+**The run took 5.2 hours of wall-clock time but only ~69 minutes of actual
+compute** — the laptop went to sleep mid-run. Ultralytics' own "completed
+in X hours" message uses a wall clock that counts sleep time; the
+`time.perf_counter()` wrapper in `train.py` does not. The 69-minute figure
+matches the calibration-based prediction (3 × ~28.5 min ≈ 85 min) far
+better. **Lesson for next time:** `caffeinate` an unattended long training
+run, or expect the reported wall-clock duration to be meaningless if the
+machine can sleep.
+
+**Real metrics, 3 epochs, full 10,000-image train set, evaluated on the
+full 2,000-image validation set:**
+
+```
+mAP50: 0.454 | mAP50-95: 0.351 | precision: 0.626 | recall: 0.464
+```
+
+**Per-class mAP50 tracks training-instance count almost exactly** —
+direct, numeric confirmation of the 134:1 class-imbalance warning from
+Document 1:
+
+```
+trousers              0.858   (2,807 train instances)
+short_sleeve_top      0.825   (3,755 train instances)
+skirt                 0.691
+shorts                0.677
+long_sleeve_top       0.592
+vest_dress            0.521
+long_sleeve_outwear   0.491
+short_sleeve_dress    0.452
+vest                  0.362
+long_sleeve_dress     0.285
+sling_dress           0.094
+sling                 0.044
+short_sleeve_outwear  0.015   (28 train instances — worst class by far)
+```
+
+Loss curves (`outputs/yolo_training/runs/train/results.png`) were still
+dropping at epoch 3 with no plateau — more epochs would very likely keep
+improving every one of these numbers. This was a deliberate "prove the
+pipeline" budget, not a converged model.
+
+---
+
+## 11. Document 10 — Real-Time Detection
+
+Closes the loop: camera → trained YOLO model → boxes on screen, in real
+time or from a single captured photo. Full writeup:
+[docs/10_Realtime_Detection.md](docs/10_Realtime_Detection.md).
+
+### What got built
+
+| File | Function | Produces |
+|---|---|---|
+| `config.py` | `resolve_weights_path()` | trained garment weights if present, else falls back to stock `yolov8n.pt` |
+| `capture.py` | `capture_single_frame()` / `frames()` | one warmed-up BGR frame, or a continuous generator |
+| `detector.py` | `GarmentDetector.detect()` | a `FrameResult`: annotated frame + structured detections + inference time |
+| `main.py` | `analyze_photo()` / `run_live()` | single-shot capture-and-save, or a continuous `cv2.imshow` loop with FPS overlay |
+
+### Run it
+
+```bash
+python -m src.realtime_detection.main --mode photo              # one frame, no window needed
+python -m src.realtime_detection.main --mode live                # live window, 'q'/ESC to quit
+python -m src.realtime_detection.main --mode photo --conf 0.15   # lower threshold (see findings below)
+```
+
+### ✅ Observed results (actually run)
+
+**Camera access worked immediately, no permission dialog** — `cv2.VideoCapture(0)`
+opened the system's default webcam and returned real frames on the first
+attempt. Saved and visually inspected a captured frame to confirm it was a
+real photo, not a black/placeholder frame. (macOS may prompt for camera
+permission on first run — grant it to your terminal/IDE if so.)
+
+**Detector wiring verified independently of training** — before Document
+6 finished, ran `GarmentDetector` against a captured photo using stock
+`yolov8n.pt` (COCO). It correctly found `person` (0.79 confidence) and
+`cup` (0.35), boxes drawn at the right coordinates — proof the
+camera → detect → draw → save pipeline works, regardless of which weights
+are loaded.
+
+**One real environmental snag, kept here on purpose:** partway through
+this session, `cam.read()` started returning `False` on every frame even
+though `cam.isOpened()` was `True`. Root cause: macOS blocks camera frame
+delivery while the screen is locked, even though the device handle still
+opens successfully. Not a code bug — confirmed by retrying minutes later
+(after the screen was unlocked) and getting real frames again immediately.
+**Lesson:** if `cam.read()` silently fails after a long-running background
+task, check screen-lock state before assuming a driver/permission problem.
+
+**With Document 6's 3-epoch garment model:** a close, dimly lit selfie
+(mostly face, a sliver of grey shirt) produced **zero detections at the
+default 0.25 confidence threshold**. Lowering `--conf` to 0.15 surfaced a
+real but weak signal — a box roughly over the visible shirt, labeled
+`vest_dress` at 0.18 confidence: right general location, wrong class, low
+confidence. Expected for 3 epochs on clean e-commerce photos being asked
+to generalize to an out-of-distribution selfie — not a pipeline bug, since
+the same code path correctly drew COCO boxes earlier. `--conf` was added
+to `main.py` specifically because of this finding.
+
+---
+
+## 12. What's next
+
+Documents 2, 4, 5, 7, 8, and 9 remain deferred (see Section 9 for the
+Document 2 rationale; Documents 6 and 10's own "What's next" sections in
+`docs/06_YOLO_Training.md` and `docs/10_Realtime_Detection.md` cover the
+rest). The trained model and live camera loop are functional end-to-end
+today; a longer training run (more epochs, ideally with `caffeinate` and a
+stratified split) is the highest-leverage next step for detection quality.
 
 ---
 

@@ -57,7 +57,7 @@ After implementing `load_dataset()`, before touching anything else, sanity
 check it directly:
 
 ```bash
-cd "/Users/prabuddhaverma/Visual Studio Code /yolo"
+cd /path/to/yolofashiondesign   # your local clone of this repo
 source venv/bin/activate
 python3 -c "
 from src.dataset_analysis import config

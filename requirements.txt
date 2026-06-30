@@ -8,3 +8,5 @@ jupyter
 nbformat
 nbclient
 ipykernel
+ultralytics
+pyyaml
